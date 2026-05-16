@@ -1,4 +1,3 @@
-@'
 import express from 'express'
 import cors from 'cors'
 
@@ -48,4 +47,3 @@ app.get('/api/health', (req, res) => {
 
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => console.log(`Backend rodando na porta ${PORT}`))
-'@ | Set-Content server.js -Encoding UTF8
