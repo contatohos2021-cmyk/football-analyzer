@@ -3,7 +3,6 @@ import cors from 'cors'
 
 const app = express()
 
-// CORS aberto
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -16,10 +15,10 @@ app.use(express.json())
 const API_KEY = process.env.API_FOOTBALL_KEY || ''
 const PORT = process.env.PORT || 3001
 
-console.log('🚀 Iniciando backend...')
+console.log('🚀 Football Trading Backend - Professional Edition')
 console.log('🔑 API Key:', API_KEY ? 'Configurada ✅' : 'NÃO configurada ❌')
 
-// Cache simples
+// CACHE
 const cache = new Map()
 
 function setCache(key, value, ttl = 60000) {
@@ -35,11 +34,11 @@ function getCache(key) {
   return item.value
 }
 
-// API Fetch com proteção
+// API FETCH
 async function apiFetch(path) {
   try {
     const url = `https://v3.football.api-sports.io${path}`
-    console.log('📡 Request:', url)
+    console.log('📡', url)
     
     const res = await fetch(url, {
       headers: {
@@ -51,11 +50,11 @@ async function apiFetch(path) {
     
     if (!res.ok) {
       console.error('❌ API Error:', res.status)
-      return { response: [], errors: [`API returned ${res.status}`] }
+      return { response: [], errors: [`API error ${res.status}`] }
     }
     
     const data = await res.json()
-    console.log('✅ Response OK')
+    console.log('✅ OK')
     return data
     
   } catch (error) {
@@ -72,7 +71,16 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     keyConfigured: !!API_KEY,
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    endpoints: [
+      '/api/live',
+      '/api/fixtures',
+      '/api/trading/collect',
+      '/api/stats/:id',
+      '/api/form/:teamId',
+      '/api/h2h/:team1/:team2',
+      '/api/injuries/:teamId'
+    ]
   })
 })
 
@@ -81,20 +89,17 @@ app.get('/api/health', (req, res) => {
 // ══════════════════════════════════════════════════════
 app.get('/api/live', async (req, res) => {
   try {
-    const cacheKey = 'live:all'
-    let data = getCache(cacheKey)
+    const key = 'live:all'
+    let data = getCache(key)
     
     if (!data) {
-      console.log('🔄 Buscando partidas ao vivo...')
+      console.log('🔄 Live matches')
       data = await apiFetch('/fixtures?live=all')
-      setCache(cacheKey, data, 30000) // 30s
-    } else {
-      console.log('💾 Cache hit: live')
+      setCache(key, data, 30000)
     }
     
     res.json(data)
   } catch (error) {
-    console.error('Error /api/live:', error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -105,26 +110,114 @@ app.get('/api/live', async (req, res) => {
 app.get('/api/fixtures', async (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().split('T')[0]
-    const cacheKey = `fixtures:${date}`
-    let data = getCache(cacheKey)
+    const key = `fixtures:${date}`
+    let data = getCache(key)
     
     if (!data) {
-      console.log('🔄 Buscando partidas de:', date)
+      console.log('🔄 Fixtures:', date)
       data = await apiFetch(`/fixtures?date=${date}`)
-      setCache(cacheKey, data, 60000) // 1min
-    } else {
-      console.log('💾 Cache hit: fixtures')
+      setCache(key, data, 60000)
     }
     
     res.json(data)
   } catch (error) {
-    console.error('Error /api/fixtures:', error)
     res.status(500).json({ error: error.message })
   }
 })
 
 // ══════════════════════════════════════════════════════
-// COLETA PRIORIZADA
+// FORMA DO TIME (últimos jogos casa/fora)
+// ══════════════════════════════════════════════════════
+app.get('/api/form/:teamId', async (req, res) => {
+  try {
+    const { teamId } = req.params
+    const { league, season, last = 5, venue } = req.query
+    
+    // venue: home, away, ou nenhum (todos)
+    let path = `/fixtures?team=${teamId}&season=${season || new Date().getFullYear()}&last=${last}`
+    if (league) path += `&league=${league}`
+    if (venue) path += `&venue=${venue}`
+    
+    const key = `form:${teamId}:${venue || 'all'}:${season}`
+    let data = getCache(key)
+    
+    if (!data) {
+      console.log('🔄 Team form:', teamId, venue)
+      data = await apiFetch(path)
+      setCache(key, data, 3600000) // 1h
+    }
+    
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ══════════════════════════════════════════════════════
+// H2H (Head to Head)
+// ══════════════════════════════════════════════════════
+app.get('/api/h2h/:team1/:team2', async (req, res) => {
+  try {
+    const { team1, team2 } = req.params
+    const { last = 5 } = req.query
+    
+    const key = `h2h:${team1}:${team2}`
+    let data = getCache(key)
+    
+    if (!data) {
+      console.log('🔄 H2H:', team1, 'vs', team2)
+      data = await apiFetch(`/fixtures/headtohead?h2h=${team1}-${team2}&last=${last}`)
+      setCache(key, data, 3600000) // 1h
+    }
+    
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ══════════════════════════════════════════════════════
+// INJURIES/SIDELINED (Lesões e Desfalques)
+// ══════════════════════════════════════════════════════
+app.get('/api/injuries/:teamId', async (req, res) => {
+  try {
+    const { teamId } = req.params
+    const key = `injuries:${teamId}`
+    let data = getCache(key)
+    
+    if (!data) {
+      console.log('🔄 Injuries:', teamId)
+      data = await apiFetch(`/injuries?team=${teamId}`)
+      setCache(key, data, 7200000) // 2h
+    }
+    
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ══════════════════════════════════════════════════════
+// STATS
+// ══════════════════════════════════════════════════════
+app.get('/api/stats/:id', async (req, res) => {
+  try {
+    const key = `stats:${req.params.id}`
+    let data = getCache(key)
+    
+    if (!data) {
+      data = await apiFetch(`/fixtures/statistics?fixture=${req.params.id}`)
+      setCache(key, data, 45000)
+    }
+    
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ══════════════════════════════════════════════════════
+// COLETA COMPLETA PRIORIZADA
 // ══════════════════════════════════════════════════════
 app.post('/api/trading/collect', async (req, res) => {
   try {
@@ -134,7 +227,7 @@ app.post('/api/trading/collect', async (req, res) => {
       return res.status(400).json({ error: 'fixtureId required' })
     }
     
-    console.log('🎯 Coletando dados para fixture:', fixtureId)
+    console.log('🎯 COLETA COMPLETA:', fixtureId)
     
     const result = {
       fixtureId,
@@ -144,7 +237,19 @@ app.post('/api/trading/collect', async (req, res) => {
       errors: {}
     }
     
-    // Odds (prioridade 1)
+    // 1. FIXTURE INFO
+    const fixtureKey = `fixture:${fixtureId}`
+    let fixture = getCache(fixtureKey)
+    if (!fixture) {
+      fixture = await apiFetch(`/fixtures?id=${fixtureId}`)
+      setCache(fixtureKey, fixture, 60000)
+      result.collected.fixture = true
+    } else {
+      result.cacheHits.fixture = true
+    }
+    result.fixture = fixture.response?.[0] || null
+    
+    // 2. ODDS
     const oddsKey = `odds:${fixtureId}`
     let odds = getCache(oddsKey)
     if (!odds) {
@@ -156,7 +261,7 @@ app.post('/api/trading/collect', async (req, res) => {
     }
     result.odds = odds.response?.[0] || null
     
-    // Stats (se ao vivo)
+    // 3. STATS (se ao vivo)
     if (isLive) {
       const statsKey = `stats:${fixtureId}`
       let stats = getCache(statsKey)
@@ -169,7 +274,7 @@ app.post('/api/trading/collect', async (req, res) => {
       }
       result.stats = stats.response || []
       
-      // Events
+      // EVENTS
       const eventsKey = `events:${fixtureId}`
       let events = getCache(eventsKey)
       if (!events) {
@@ -182,24 +287,29 @@ app.post('/api/trading/collect', async (req, res) => {
       result.events = events.response || []
     }
     
-    // H2H (background)
-    const h2hKey = `h2h:${fixtureId}`
-    let h2h = getCache(h2hKey)
-    if (!h2h) {
-      h2h = await apiFetch(`/fixtures/headtohead?fixture=${fixtureId}&last=5`)
-      setCache(h2hKey, h2h, 3600000) // 1h
-      result.collected.h2h = true
-    } else {
-      result.cacheHits.h2h = true
+    // 4. H2H
+    if (result.fixture) {
+      const homeId = result.fixture.teams.home.id
+      const awayId = result.fixture.teams.away.id
+      
+      const h2hKey = `h2h:${homeId}:${awayId}`
+      let h2h = getCache(h2hKey)
+      if (!h2h) {
+        h2h = await apiFetch(`/fixtures/headtohead?h2h=${homeId}-${awayId}&last=5`)
+        setCache(h2hKey, h2h, 3600000)
+        result.collected.h2h = true
+      } else {
+        result.cacheHits.h2h = true
+      }
+      result.h2h = h2h.response || []
     }
-    result.h2h = h2h.response || []
     
-    // Prediction
+    // 5. PREDICTION
     const predKey = `prediction:${fixtureId}`
     let prediction = getCache(predKey)
     if (!prediction) {
       prediction = await apiFetch(`/predictions?fixture=${fixtureId}`)
-      setCache(predKey, prediction, 86400000) // 24h
+      setCache(predKey, prediction, 86400000)
       result.collected.prediction = true
     } else {
       result.cacheHits.prediction = true
@@ -210,68 +320,32 @@ app.post('/api/trading/collect', async (req, res) => {
     res.json(result)
     
   } catch (error) {
-    console.error('Error /api/trading/collect:', error)
+    console.error('Error:', error)
     res.status(500).json({ error: error.message, stack: error.stack })
   }
 })
 
-// ══════════════════════════════════════════════════════
-// STATS
-// ══════════════════════════════════════════════════════
-app.get('/api/stats/:id', async (req, res) => {
-  try {
-    const key = `stats:${req.params.id}`
-    let data = getCache(key)
-    if (!data) {
-      data = await apiFetch(`/fixtures/statistics?fixture=${req.params.id}`)
-      setCache(key, data, 45000)
-    }
-    res.json(data)
-  } catch (error) {
-    res.status(500).json({ error: error.message })
-  }
-})
-
-// ══════════════════════════════════════════════════════
-// CATCH ALL ERRORS
-// ══════════════════════════════════════════════════════
+// ERROR HANDLER
 app.use((error, req, res, next) => {
-  console.error('💥 Unhandled error:', error)
-  res.status(500).json({
-    error: 'Internal server error',
-    message: error.message
-  })
+  console.error('💥 Error:', error)
+  res.status(500).json({ error: error.message })
 })
 
-// ══════════════════════════════════════════════════════
-// START SERVER
-// ══════════════════════════════════════════════════════
+// START
 app.listen(PORT, '0.0.0.0', () => {
   console.log('✅ Backend rodando')
   console.log(`📡 Porta: ${PORT}`)
   console.log(`🔑 API Key: ${API_KEY ? 'OK' : 'FALTA'}`)
-  console.log(`🌐 Endpoints: 6`)
-  console.log('💾 Cache: Ativo')
+  console.log(`🌐 Endpoints: 8`)
 })
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('👋 Shutting down gracefully...')
-  process.exit(0)
-})
-
-process.on('SIGINT', () => {
-  console.log('👋 Shutting down...')
-  process.exit(0)
-})
-
-// Catch uncaught errors
+process.on('SIGTERM', () => process.exit(0))
+process.on('SIGINT', () => process.exit(0))
 process.on('uncaughtException', (error) => {
-  console.error('💥 Uncaught Exception:', error)
+  console.error('💥 Uncaught:', error)
   process.exit(1)
 })
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled Rejection:', reason)
+process.on('unhandledRejection', (reason) => {
+  console.error('💥 Unhandled:', reason)
   process.exit(1)
 })
