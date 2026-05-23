@@ -15,7 +15,7 @@ app.use(express.json())
 const API_KEY = process.env.API_FOOTBALL_KEY || ''
 const PORT = process.env.PORT || 3001
 
-console.log('🚀 Football Trading Backend v2')
+console.log('🚀 Football Trading Backend v3 - PRO')
 console.log('🔑 API Key:', API_KEY ? '✅' : '❌')
 
 const cache = new Map()
@@ -52,7 +52,7 @@ async function apiFetch(path) {
     }
     
     const data = await res.json()
-    console.log('✅', path, '→', data.response?.length || 0, 'results')
+    console.log('✅', path, '→', data.response?.length || 0)
     return data
     
   } catch (error) {
@@ -65,10 +65,9 @@ async function apiFetch(path) {
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    version: '2.0',
+    version: '3.0',
     keyConfigured: !!API_KEY,
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    features: ['stats', 'form', 'h2h', 'injuries', 'standings', 'lineups', 'weather']
   })
 })
 
@@ -102,9 +101,7 @@ app.get('/api/fixtures', async (req, res) => {
   }
 })
 
-// ════════════════════════════════════════════
-// FORMA - SIMPLIFICADO (últimos N jogos)
-// ════════════════════════════════════════════
+// FORMA
 app.get('/api/form/:teamId', async (req, res) => {
   try {
     const { teamId } = req.params
@@ -114,14 +111,11 @@ app.get('/api/form/:teamId', async (req, res) => {
     let data = getCache(key)
     
     if (!data) {
-      // BUSCA SIMPLES: últimos jogos do time SEM filtros restritivos
       let path = `/fixtures?team=${teamId}&last=${last}`
       if (venue) path += `&venue=${venue}`
-      
       data = await apiFetch(path)
-      setCache(key, data, 3600000) // 1h
+      setCache(key, data, 3600000)
     }
-    
     res.json(data)
   } catch (error) {
     res.status(500).json({ error: error.message })
@@ -129,25 +123,37 @@ app.get('/api/form/:teamId', async (req, res) => {
 })
 
 // ════════════════════════════════════════════
-// STATS DA TEMPORADA DO TIME
+// STANDINGS - Classificação do Campeonato
 // ════════════════════════════════════════════
-app.get('/api/team-stats/:teamId', async (req, res) => {
+app.get('/api/standings/:league/:season', async (req, res) => {
   try {
-    const { teamId } = req.params
-    const { league, season } = req.query
-    
-    if (!league || !season) {
-      return res.status(400).json({ error: 'league and season required' })
-    }
-    
-    const key = `teamstats:${teamId}:${league}:${season}`
+    const { league, season } = req.params
+    const key = `standings:${league}:${season}`
     let data = getCache(key)
     
     if (!data) {
-      data = await apiFetch(`/teams/statistics?team=${teamId}&league=${league}&season=${season}`)
+      data = await apiFetch(`/standings?league=${league}&season=${season}`)
       setCache(key, data, 3600000) // 1h
     }
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ════════════════════════════════════════════
+// LINEUPS - Escalações
+// ════════════════════════════════════════════
+app.get('/api/lineups/:fixtureId', async (req, res) => {
+  try {
+    const { fixtureId } = req.params
+    const key = `lineups:${fixtureId}`
+    let data = getCache(key)
     
+    if (!data) {
+      data = await apiFetch(`/fixtures/lineups?fixture=${fixtureId}`)
+      setCache(key, data, 1800000) // 30min
+    }
     res.json(data)
   } catch (error) {
     res.status(500).json({ error: error.message })
@@ -167,7 +173,6 @@ app.get('/api/h2h/:team1/:team2', async (req, res) => {
       data = await apiFetch(`/fixtures/headtohead?h2h=${team1}-${team2}&last=${last}`)
       setCache(key, data, 3600000)
     }
-    
     res.json(data)
   } catch (error) {
     res.status(500).json({ error: error.message })
@@ -189,21 +194,28 @@ app.get('/api/injuries/:teamId', async (req, res) => {
       data = await apiFetch(path)
       setCache(key, data, 7200000)
     }
-    
     res.json(data)
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
 })
 
-// STATS DE FIXTURE
-app.get('/api/stats/:id', async (req, res) => {
+// TEAM STATS
+app.get('/api/team-stats/:teamId', async (req, res) => {
   try {
-    const key = `stats:${req.params.id}`
+    const { teamId } = req.params
+    const { league, season } = req.query
+    
+    if (!league || !season) {
+      return res.status(400).json({ error: 'league and season required' })
+    }
+    
+    const key = `teamstats:${teamId}:${league}:${season}`
     let data = getCache(key)
+    
     if (!data) {
-      data = await apiFetch(`/fixtures/statistics?fixture=${req.params.id}`)
-      setCache(key, data, 45000)
+      data = await apiFetch(`/teams/statistics?team=${teamId}&league=${league}&season=${season}`)
+      setCache(key, data, 3600000)
     }
     res.json(data)
   } catch (error) {
@@ -212,7 +224,7 @@ app.get('/api/stats/:id', async (req, res) => {
 })
 
 // ════════════════════════════════════════════
-// COLETA COMPLETA - MELHORADA
+// COLETA COMPLETA v3 - TUDO
 // ════════════════════════════════════════════
 app.post('/api/trading/collect', async (req, res) => {
   try {
@@ -222,22 +234,20 @@ app.post('/api/trading/collect', async (req, res) => {
       return res.status(400).json({ error: 'fixtureId required' })
     }
     
-    console.log('🎯 COLETA:', fixtureId, isLive ? '(LIVE)' : '(PRE)')
+    console.log('🎯 COLETA v3:', fixtureId)
     
     const result = {
       fixtureId,
       timestamp: new Date().toISOString(),
-      collected: {},
-      cacheHits: {}
+      collected: {}
     }
     
-    // 1. FIXTURE
+    // 1. FIXTURE (contém weather, venue, etc)
     const fixtureKey = `fixture:${fixtureId}`
     let fixture = getCache(fixtureKey)
     if (!fixture) {
       fixture = await apiFetch(`/fixtures?id=${fixtureId}`)
       setCache(fixtureKey, fixture, 60000)
-      result.collected.fixture = true
     }
     result.fixture = fixture.response?.[0] || null
     
@@ -256,7 +266,6 @@ app.post('/api/trading/collect', async (req, res) => {
     if (!odds) {
       odds = await apiFetch(`/odds?fixture=${fixtureId}&bookmaker=6`)
       setCache(oddsKey, odds, 30000)
-      result.collected.odds = true
     }
     result.odds = odds.response?.[0] || null
     
@@ -267,7 +276,6 @@ app.post('/api/trading/collect', async (req, res) => {
       if (!stats) {
         stats = await apiFetch(`/fixtures/statistics?fixture=${fixtureId}`)
         setCache(statsKey, stats, 45000)
-        result.collected.stats = true
       }
       result.stats = stats.response || []
       
@@ -276,7 +284,6 @@ app.post('/api/trading/collect', async (req, res) => {
       if (!events) {
         events = await apiFetch(`/fixtures/events?fixture=${fixtureId}`)
         setCache(eventsKey, events, 45000)
-        result.collected.events = true
       }
       result.events = events.response || []
     }
@@ -287,37 +294,33 @@ app.post('/api/trading/collect', async (req, res) => {
     if (!h2h) {
       h2h = await apiFetch(`/fixtures/headtohead?h2h=${homeId}-${awayId}&last=10`)
       setCache(h2hKey, h2h, 3600000)
-      result.collected.h2h = true
     }
     result.h2h = h2h.response || []
     
-    // 5. FORMA CASA (SEM filtro de liga)
+    // 5. FORMA CASA
     const homeFormKey = `form:${homeId}:10:home`
     let homeForm = getCache(homeFormKey)
     if (!homeForm) {
       homeForm = await apiFetch(`/fixtures?team=${homeId}&last=10&venue=home`)
       setCache(homeFormKey, homeForm, 3600000)
-      result.collected.homeForm = true
     }
     result.homeForm = homeForm.response || []
     
-    // 6. FORMA FORA (SEM filtro de liga)
+    // 6. FORMA FORA
     const awayFormKey = `form:${awayId}:10:away`
     let awayForm = getCache(awayFormKey)
     if (!awayForm) {
       awayForm = await apiFetch(`/fixtures?team=${awayId}&last=10&venue=away`)
       setCache(awayFormKey, awayForm, 3600000)
-      result.collected.awayForm = true
     }
     result.awayForm = awayForm.response || []
     
-    // 7. ÚLTIMOS JOGOS GERAIS (para backup)
+    // 7. ÚLTIMOS JOGOS GERAIS (backup)
     const homeLastKey = `last:${homeId}:5`
     let homeLast = getCache(homeLastKey)
     if (!homeLast) {
       homeLast = await apiFetch(`/fixtures?team=${homeId}&last=5`)
       setCache(homeLastKey, homeLast, 3600000)
-      result.collected.homeLast = true
     }
     result.homeLast = homeLast.response || []
     
@@ -326,17 +329,15 @@ app.post('/api/trading/collect', async (req, res) => {
     if (!awayLast) {
       awayLast = await apiFetch(`/fixtures?team=${awayId}&last=5`)
       setCache(awayLastKey, awayLast, 3600000)
-      result.collected.awayLast = true
     }
     result.awayLast = awayLast.response || []
     
-    // 8. STATS DA TEMPORADA (médias, xG, etc.)
+    // 8. STATS DA TEMPORADA
     const homeStatsKey = `teamstats:${homeId}:${leagueId}:${season}`
     let homeStats = getCache(homeStatsKey)
     if (!homeStats) {
       homeStats = await apiFetch(`/teams/statistics?team=${homeId}&league=${leagueId}&season=${season}`)
       setCache(homeStatsKey, homeStats, 3600000)
-      result.collected.homeStats = true
     }
     result.homeTeamStats = homeStats.response || null
     
@@ -345,17 +346,24 @@ app.post('/api/trading/collect', async (req, res) => {
     if (!awayStats) {
       awayStats = await apiFetch(`/teams/statistics?team=${awayId}&league=${leagueId}&season=${season}`)
       setCache(awayStatsKey, awayStats, 3600000)
-      result.collected.awayStats = true
     }
     result.awayTeamStats = awayStats.response || null
     
-    // 9. LESÕES
+    // 9. STANDINGS (CLASSIFICAÇÃO) ✨ NOVO
+    const standingsKey = `standings:${leagueId}:${season}`
+    let standings = getCache(standingsKey)
+    if (!standings) {
+      standings = await apiFetch(`/standings?league=${leagueId}&season=${season}`)
+      setCache(standingsKey, standings, 3600000)
+    }
+    result.standings = standings.response?.[0]?.league?.standings || []
+    
+    // 10. LESÕES
     const homeInjKey = `injuries:${homeId}:${season}`
     let homeInj = getCache(homeInjKey)
     if (!homeInj) {
       homeInj = await apiFetch(`/injuries?team=${homeId}&season=${season}`)
       setCache(homeInjKey, homeInj, 7200000)
-      result.collected.homeInjuries = true
     }
     result.homeInjuries = homeInj.response || []
     
@@ -364,21 +372,28 @@ app.post('/api/trading/collect', async (req, res) => {
     if (!awayInj) {
       awayInj = await apiFetch(`/injuries?team=${awayId}&season=${season}`)
       setCache(awayInjKey, awayInj, 7200000)
-      result.collected.awayInjuries = true
     }
     result.awayInjuries = awayInj.response || []
     
-    // 10. PREDICTION
+    // 11. LINEUPS (ESCALAÇÕES) ✨ NOVO
+    const lineupsKey = `lineups:${fixtureId}`
+    let lineups = getCache(lineupsKey)
+    if (!lineups) {
+      lineups = await apiFetch(`/fixtures/lineups?fixture=${fixtureId}`)
+      setCache(lineupsKey, lineups, 1800000)
+    }
+    result.lineups = lineups.response || []
+    
+    // 12. PREDICTION
     const predKey = `prediction:${fixtureId}`
     let prediction = getCache(predKey)
     if (!prediction) {
       prediction = await apiFetch(`/predictions?fixture=${fixtureId}`)
       setCache(predKey, prediction, 86400000)
-      result.collected.prediction = true
     }
     result.prediction = prediction.response?.[0] || null
     
-    console.log('✅ Coleta completa:', Object.keys(result.collected).length, 'requests')
+    console.log('✅ Coleta v3 completa')
     res.json(result)
     
   } catch (error) {
@@ -393,8 +408,8 @@ app.use((error, req, res, next) => {
 })
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log('✅ Rodando na porta', PORT)
+  console.log('✅ Backend v3 rodando na porta', PORT)
 })
 
-process.on('uncaughtException', (e) => { console.error('💥', e); process.exit(1) })
-process.on('unhandledRejection', (e) => { console.error('💥', e); process.exit(1) })
+process.on('uncaughtException', e => { console.error('💥', e); process.exit(1) })
+process.on('unhandledRejection', e => { console.error('💥', e); process.exit(1) })
